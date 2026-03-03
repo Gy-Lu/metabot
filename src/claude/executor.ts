@@ -1,8 +1,21 @@
+import { execSync } from 'node:child_process';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import type { SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 import type { BotConfigBase } from '../config.js';
 import type { Logger } from '../utils/logger.js';
 import { AsyncQueue } from '../utils/async-queue.js';
+
+/** Resolve the Claude Code binary path at module load time. */
+function resolveClaudePath(): string {
+  if (process.env.CLAUDE_EXECUTABLE_PATH) return process.env.CLAUDE_EXECUTABLE_PATH;
+  try {
+    return execSync('which claude', { encoding: 'utf-8' }).trim();
+  } catch {
+    return '/usr/local/bin/claude'; // last-resort fallback
+  }
+}
+
+const CLAUDE_EXECUTABLE = resolveClaudePath();
 
 export interface ApiContext {
   botName: string;
@@ -82,7 +95,7 @@ export class ClaudeExecutor {
       settingSources: ['user', 'project'],
       // Use native claude binary directly to avoid "spawn node EACCES" when
       // node is not in PATH (e.g. nvm not initialised in non-interactive shells)
-      pathToClaudeCodeExecutable: process.env.CLAUDE_EXECUTABLE_PATH || '/usr/local/bin/claude',
+      pathToClaudeCodeExecutable: CLAUDE_EXECUTABLE,
     };
 
     // Build system prompt appendix from sections

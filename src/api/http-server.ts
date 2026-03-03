@@ -7,6 +7,7 @@ import type { DocSync } from '../sync/doc-sync.js';
 import { addBot, removeBot, getBotEntry } from './bots-config-writer.js';
 import { installSkillsToWorkDir } from './skills-installer.js';
 import { metrics } from '../utils/metrics.js';
+import { FeishuDocReader } from '../feishu/doc-reader.js';
 
 interface ApiServerOptions {
   port: number;
@@ -412,7 +413,7 @@ export function startApiServer(options: ApiServerOptions): http.Server {
 
           // Optionally install skills
           if (body.installSkills) {
-            installSkillsToWorkDir(workDir, logger);
+            installSkillsToWorkDir(workDir, logger, { platform: platform as 'feishu' | 'telegram' });
           }
 
           jsonResponse(res, 201, {
@@ -576,6 +577,53 @@ export function startApiServer(options: ApiServerOptions): http.Server {
         }
         const result = await docSync.syncDocument(docId);
         jsonResponse(res, result.success ? 200 : 500, result);
+        return;
+      }
+
+      // Route: GET /api/feishu/document — read a Feishu document
+      if (method === 'GET' && url.startsWith('/api/feishu/document')) {
+        const queryStr = url.includes('?') ? url.slice(url.indexOf('?') + 1) : '';
+        const params = new URLSearchParams(queryStr);
+        const docUrl = params.get('url');
+        const docId = params.get('docId');
+        const botName = params.get('botName');
+
+        if (!docUrl && !docId) {
+          jsonResponse(res, 400, { error: 'Provide either url or docId query parameter' });
+          return;
+        }
+
+        // Find a feishu bot to use
+        const feishuBots = registry.listByPlatform('feishu');
+        if (feishuBots.length === 0) {
+          jsonResponse(res, 400, { error: 'No Feishu bots configured' });
+          return;
+        }
+
+        const bot = botName
+          ? registry.getByPlatform(botName, 'feishu')
+          : feishuBots[0];
+        if (!bot || !bot.feishuClient) {
+          jsonResponse(res, 404, { error: `Feishu bot not found: ${botName}` });
+          return;
+        }
+
+        const reader = new FeishuDocReader(bot.feishuClient, logger);
+        let result;
+
+        if (docUrl) {
+          result = await reader.readByUrl(docUrl);
+        } else if (docId) {
+          // Try as document ID first
+          result = await reader.readDocument(docId);
+        }
+
+        if (!result) {
+          jsonResponse(res, 404, { error: 'Document not found or unreadable' });
+          return;
+        }
+
+        jsonResponse(res, 200, result);
         return;
       }
 

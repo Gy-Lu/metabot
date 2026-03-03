@@ -9,6 +9,7 @@ import type { Logger } from '../utils/logger.js';
 import type { MemoryClient, FolderTreeNode } from '../memory/memory-client.js';
 import { SyncStore } from './sync-store.js';
 import { markdownToBlocks, batchBlocks, contentHash } from './markdown-to-blocks.js';
+import { memoryEvents, type MemoryChangeEvent } from '../memory/memory-events.js';
 
 /** Full document with content (returned by GET /api/documents/:id). */
 export interface FullDocument {
@@ -56,6 +57,7 @@ export class DocSync {
   private throttleMs: number;
   private wikiSpaceName: string;
   private syncing = false;
+  private autoSyncCleanup?: () => void;
 
   constructor(
     private config: DocSyncConfig,
@@ -600,8 +602,75 @@ export class DocSync {
     }
   }
 
-  /** Close the sync store. */
+  /**
+   * Subscribe to MetaMemory change events and auto-sync to Feishu Wiki.
+   * Changes are debounced: multiple rapid writes are coalesced into one sync.
+   */
+  startAutoSync(debounceMs = 5000): void {
+    let debounceTimer: ReturnType<typeof setTimeout> | undefined;
+    const pendingDocIds = new Set<string>();
+    let pendingFolderChange = false;
+
+    const handler = (event: MemoryChangeEvent) => {
+      if (event.type === 'folder_created' || event.type === 'folder_deleted') {
+        pendingFolderChange = true;
+      }
+      if (event.documentId) {
+        if (event.type === 'document_deleted') {
+          // For deletions, just remove the mapping immediately (cheap, no API call)
+          this.store.deleteDocMapping(event.documentId);
+          this.logger.info({ docId: event.documentId }, 'Auto-sync: removed mapping for deleted document');
+          return;
+        }
+        pendingDocIds.add(event.documentId);
+      }
+
+      if (debounceTimer) clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(async () => {
+        if (this.syncing) {
+          this.logger.debug('Auto-sync skipped: sync already in progress');
+          return;
+        }
+
+        // Folder changes or many doc changes → full sync
+        if (pendingFolderChange || pendingDocIds.size > 10) {
+          const count = pendingDocIds.size;
+          pendingDocIds.clear();
+          pendingFolderChange = false;
+          this.logger.info({ pendingChanges: count, folderChange: pendingFolderChange }, 'Auto-sync: triggering full sync');
+          this.syncAll().catch((err) => this.logger.error({ err }, 'Auto-sync full sync failed'));
+          return;
+        }
+
+        // Incremental: sync only changed documents
+        const docIds = Array.from(pendingDocIds);
+        pendingDocIds.clear();
+        pendingFolderChange = false;
+        if (docIds.length === 0) return;
+
+        this.logger.info({ docIds }, 'Auto-sync: syncing changed documents');
+        for (const docId of docIds) {
+          try {
+            await this.syncDocument(docId);
+          } catch (err) {
+            this.logger.error({ err, docId }, 'Auto-sync: failed to sync document');
+          }
+        }
+      }, debounceMs);
+    };
+
+    memoryEvents.onChange(handler);
+    this.autoSyncCleanup = () => {
+      if (debounceTimer) clearTimeout(debounceTimer);
+      memoryEvents.removeListener('change', handler);
+    };
+
+    this.logger.info({ debounceMs }, 'Auto wiki sync enabled');
+  }
+
+  /** Close the sync store and stop auto-sync. */
   destroy(): void {
+    if (this.autoSyncCleanup) this.autoSyncCleanup();
     this.store.close();
   }
 }

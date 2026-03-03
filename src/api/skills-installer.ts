@@ -4,13 +4,26 @@ import * as path from 'node:path';
 import * as url from 'node:url';
 import type { Logger } from '../utils/logger.js';
 
-const SKILL_NAMES = ['metaskill', 'metamemory', 'metabot'];
+/** Skills installed for all platforms. */
+const COMMON_SKILLS = ['metaskill', 'metamemory', 'metabot'];
 
-export function installSkillsToWorkDir(workDir: string, logger: Logger): void {
+/** Skills only installed for Feishu bots. */
+const FEISHU_SKILLS = ['feishu-doc'];
+
+export interface InstallSkillsOptions {
+  /** Bot platform — feishu-only skills are skipped for other platforms. */
+  platform?: 'feishu' | 'telegram';
+}
+
+export function installSkillsToWorkDir(workDir: string, logger: Logger, options?: InstallSkillsOptions): void {
   const userSkillsDir = path.join(os.homedir(), '.claude', 'skills');
   const destSkillsDir = path.join(workDir, '.claude', 'skills');
 
-  for (const skill of SKILL_NAMES) {
+  const skillNames = options?.platform === 'feishu'
+    ? [...COMMON_SKILLS, ...FEISHU_SKILLS]
+    : COMMON_SKILLS;
+
+  for (const skill of skillNames) {
     const src = path.join(userSkillsDir, skill);
 
     if (!fs.existsSync(src)) {

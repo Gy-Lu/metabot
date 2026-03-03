@@ -26,6 +26,7 @@ export class StreamProcessor {
   private _imagePaths: Set<string> = new Set();
   private _pendingQuestion: PendingQuestion | null = null;
   private _autoRespondTools: AutoRespondTool[] = [];
+  private _planFilePath: string | null = null;
 
   constructor(private userPrompt: string) {}
 
@@ -160,11 +161,14 @@ export class StreamProcessor {
     const detail = formatToolDetail(name, input);
     this.toolCalls.push({ name, detail, status: 'running' });
 
-    // Track image file paths from Write tool
+    // Track image file paths and plan file paths from Write tool
     if (name === 'Write' && input && typeof input === 'object') {
       const filePath = (input as Record<string, unknown>).file_path as string;
       if (filePath && isImagePath(filePath)) {
         this._imagePaths.add(filePath);
+      }
+      if (filePath && filePath.includes('.claude/plans/') && filePath.endsWith('.md')) {
+        this._planFilePath = filePath;
       }
     }
   }
@@ -228,6 +232,10 @@ export class StreamProcessor {
 
   getImagePaths(): string[] {
     return [...this._imagePaths];
+  }
+
+  getPlanFilePath(): string | null {
+    return this._planFilePath;
   }
 }
 

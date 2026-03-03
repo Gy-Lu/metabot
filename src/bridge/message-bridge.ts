@@ -1,4 +1,5 @@
 import * as fs from 'node:fs';
+import * as fsPromises from 'node:fs/promises';
 import * as path from 'node:path';
 import type { BotConfigBase } from '../config.js';
 import type { Logger } from '../utils/logger.js';
@@ -375,6 +376,12 @@ export class MessageBridge {
           const sid = processor.getSessionId() || '';
           const response = getAutoResponse(tool.name);
           this.logger.info({ chatId, toolName: tool.name, toolUseId: tool.toolUseId }, 'Auto-responding to interactive tool');
+
+          // ExitPlanMode: send plan content to user before auto-responding
+          if (tool.name === 'ExitPlanMode') {
+            await this.sendPlanContent(chatId, processor, state);
+          }
+
           executionHandle.sendAnswer(tool.toolUseId, sid, response);
         }
 
@@ -588,6 +595,11 @@ export class MessageBridge {
           const sid = processor.getSessionId() || '';
           const response = getAutoResponse(tool.name);
           this.logger.info({ chatId, toolName: tool.name, toolUseId: tool.toolUseId }, 'API task: auto-responding to interactive tool');
+
+          if (tool.name === 'ExitPlanMode' && sendCards) {
+            await this.sendPlanContent(chatId, processor, state);
+          }
+
           executionHandle.sendAnswer(tool.toolUseId, sid, response);
         }
 
@@ -704,6 +716,24 @@ export class MessageBridge {
       try {
         await this.sender.sendText(chatId, `${statusEmoji} ${summary}`);
       } catch { /* last resort failed */ }
+    }
+  }
+
+  /**
+   * Read and send plan file content to the user when ExitPlanMode is triggered.
+   */
+  private async sendPlanContent(chatId: string, processor: StreamProcessor, _currentState: CardState): Promise<void> {
+    const planPath = processor.getPlanFilePath();
+    if (!planPath) return;
+
+    try {
+      const planContent = await fsPromises.readFile(planPath, 'utf-8');
+      if (!planContent.trim()) return;
+
+      this.logger.info({ chatId, planPath }, 'Sending plan content to user');
+      await this.sender.sendTextNotice(chatId, '📋 Plan', planContent, 'green');
+    } catch (err) {
+      this.logger.warn({ err, planPath, chatId }, 'Failed to read plan file for display');
     }
   }
 

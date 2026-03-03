@@ -54,12 +54,13 @@ We built MetaBot to run [XVI Robotics](https://github.com/xvirobotics) as an **a
 | Component | Description |
 |-----------|-------------|
 | **Claude Code Kernel** | Every bot is a full Claude Code instance — Read, Write, Edit, Bash, Glob, Grep, WebSearch, MCP, and more. `bypassPermissions` mode for autonomous operation. |
-| **MetaSkill** | Agent factory. `/metaskill ios app` generates a complete `.claude/` agent team (tech-lead + specialists + code-reviewer) after researching best practices. |
-| **MetaMemory** | Embedded SQLite knowledge store with full-text search and Web UI. Agents read/write Markdown documents across sessions. Shared by all agents. |
+| **MetaSkill** | Agent factory. `/metaskill ios app` generates a complete `.claude/` agent team (orchestrator + specialists + code-reviewer) after researching best practices. Uses MetaMemory for shared knowledge across agents. |
+| **MetaMemory** | Embedded SQLite knowledge store with full-text search and Web UI. Agents read/write Markdown documents across sessions. Shared by all agents. Auto-syncs to Feishu Wiki when changes occur (debounced). |
+| **Feishu Doc Reader** | Read Feishu documents and wiki pages as Markdown. `fd read <url>` from CLI, or Claude auto-reads when users share Feishu URLs. Available as the `feishu-doc` skill. |
 | **IM Bridge** | Chat with any agent from Feishu/Lark or Telegram (including mobile). Streaming cards with color-coded status and tool call tracking. |
 | **Agent Bus** | REST API on port 9100. Agents delegate tasks to each other via `curl`. Create/remove bots at runtime. Exposed as the `/metabot` skill — loaded on demand, not injected into every prompt. |
 | **Task Scheduler** | One-time delays and recurring cron jobs. `0 8 * * 1-5` = weekday 8am news briefing. Timezone-aware (default: Asia/Shanghai). Persists across restarts, auto-retries when busy. |
-| **CLI Tools** | `metabot`, `mm`, and `mb` commands installed to `~/.local/bin/`. `metabot update` to pull/rebuild/restart. `mm` for MetaMemory, `mb` for Agent Bus. |
+| **CLI Tools** | `metabot`, `mm`, `mb`, and `fd` commands installed to `~/.local/bin/`. `metabot update` to pull/rebuild/restart. `mm` for MetaMemory, `mb` for Agent Bus, `fd` for Feishu docs. |
 
 ## Install
 
@@ -92,7 +93,7 @@ Prerequisites: Node.js 20+, [Claude Code CLI](https://github.com/anthropics/clau
 
 **Feishu/Lark** ([detailed guide](docs/feishu-setup.md)):
 1. Create app at [open.feishu.cn](https://open.feishu.cn/) → add Bot capability
-2. Enable permissions: `im:message`, `im:message:readonly`, `im:resource`
+2. Enable permissions: `im:message`, `im:message:readonly`, `im:resource`, `docx:document:readonly`, `wiki:wiki` (for doc reading & wiki sync)
 3. Start MetaBot, then enable persistent connection + `im.message.receive_v1` event
 4. Publish the app
 
@@ -154,6 +155,9 @@ Prerequisites: Node.js 20+, [Claude Code CLI](https://github.com/anthropics/clau
 | `WIKI_SYNC_ENABLED` | true | Enable MetaMemory→Wiki sync (requires Feishu bot) |
 | `WIKI_SPACE_ID` | — | Feishu Wiki space ID |
 | `WIKI_SPACE_NAME` | MetaMemory | Feishu Wiki space name |
+| `WIKI_AUTO_SYNC` | true | Auto-sync on MetaMemory changes (debounced) |
+| `WIKI_AUTO_SYNC_DEBOUNCE_MS` | 5000 | Debounce delay for auto-sync |
+| `CLAUDE_EXECUTABLE_PATH` | auto-detect | Path to `claude` binary (resolved via `which` if not set) |
 | `WEBHOOK_URLS` | — | Comma-separated webhook URLs for task completion notifications |
 | `LOG_LEVEL` | info | Log level |
 
@@ -219,12 +223,13 @@ MetaBot runs Claude Code in `bypassPermissions` mode — no interactive approval
 | `POST` | `/api/sync` | Trigger MetaMemory → Wiki sync |
 | `GET` | `/api/sync` | Wiki sync status |
 | `POST` | `/api/sync/document` | Sync single document by ID |
+| `GET` | `/api/feishu/document` | Read a Feishu document as Markdown |
 | `GET` | `/api/stats` | Cost & usage stats (per-bot, per-user) |
 | `GET` | `/api/metrics` | Prometheus metrics endpoint |
 
 ## CLI Tools
 
-The installer places `metabot`, `mm`, and `mb` executables in `~/.local/bin/` — available immediately, no `source` needed.
+The installer places `metabot`, `mm`, `mb`, and `fd` (Feishu bots only) executables in `~/.local/bin/` — available immediately, no `source` needed.
 
 ```bash
 # MetaBot management
@@ -246,6 +251,11 @@ echo '# Notes' | mm create "Title" --folder ID --tags "dev"
 echo '# Updated' | mm update DOC_ID
 mm mkdir "new-folder"               # create folder
 mm delete DOC_ID                    # delete document
+
+# Feishu Document Reader (Feishu bots only)
+fd read <feishu-url>                # read document by URL (docx or wiki)
+fd read-id <docId>                  # read document by ID
+fd info <feishu-url>                # get document metadata
 
 # Agent Bus
 mb bots                             # list all bots

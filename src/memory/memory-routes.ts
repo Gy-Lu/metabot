@@ -1,4 +1,5 @@
 import type { MemoryStorage, DocumentCreateInput, DocumentUpdateInput, Role, Visibility } from './memory-storage.js';
+import { memoryEvents } from './memory-events.js';
 
 interface RouteResult {
   status: number;
@@ -25,6 +26,7 @@ export function handleCreateFolder(storage: MemoryStorage, body: Record<string, 
   }
   try {
     const folder = storage.createFolder(name, parentId, visibility);
+    memoryEvents.emitChange({ type: 'folder_created', folderId: folder.id });
     return { status: 201, body: folder };
   } catch (err: any) {
     return { status: 400, body: { detail: err.message } };
@@ -50,6 +52,7 @@ export function handleDeleteFolder(storage: MemoryStorage, folderId: string, rol
   }
   try {
     storage.deleteFolder(folderId);
+    memoryEvents.emitChange({ type: 'folder_deleted', folderId });
     return { status: 200, body: { ok: true } };
   } catch (err: any) {
     if (err.message.includes('Cannot delete root')) {
@@ -114,6 +117,7 @@ export function handleCreateDocument(
 
   try {
     const doc = storage.createDocument(data, role);
+    memoryEvents.emitChange({ type: 'document_created', documentId: doc.id });
     return { status: 201, body: doc };
   } catch (err: any) {
     if (err.message.includes('Access denied')) {
@@ -137,12 +141,14 @@ export function handleUpdateDocument(
 
   const doc = storage.updateDocument(docId, data, role);
   if (!doc) return { status: 404, body: { detail: 'Document not found' } };
+  memoryEvents.emitChange({ type: 'document_updated', documentId: docId });
   return { status: 200, body: doc };
 }
 
 export function handleDeleteDocument(storage: MemoryStorage, docId: string, role: Role): RouteResult {
   const deleted = storage.deleteDocument(docId, role);
   if (!deleted) return { status: 404, body: { detail: 'Document not found' } };
+  memoryEvents.emitChange({ type: 'document_deleted', documentId: docId });
   return { status: 200, body: { ok: true } };
 }
 

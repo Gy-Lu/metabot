@@ -38,7 +38,8 @@ Feishu WSClient → EventHandler (parse, @mention filter) → MessageBridge → 
 - **`src/bridge/message-bridge.ts`** — Core orchestrator. Routes commands (`/reset`, `/stop`, `/status`, `/help`, `/memory`), manages running tasks per chat (one task at a time per `chatId`), executes Claude queries with streaming card updates, handles image input/output, enforces 1-hour timeout.
 - **`src/memory/memory-client.ts`** — Lightweight HTTP client for the MetaMemory server. Used by `/memory` commands (list, search, status) for quick Feishu responses without spawning Claude.
 - **`src/claude/executor.ts`** — Wraps `query()` from the Agent SDK as an async generator yielding `SDKMessage`. Configures permissionMode, allowedTools, MCP settings, session resume.
-- **`src/claude/stream-processor.ts`** — Transforms the raw SDK message stream into `CardState` objects for display. Tracks tool calls, response text, session ID, cost/duration. Also extracts image file paths from tool outputs.
+- **`src/claude/stream-processor.ts`** — Transforms the raw SDK message stream into `CardState` objects for display. Tracks tool calls, response text, session ID, cost/duration. Also extracts image file paths and plan file paths from tool outputs.
+- **`src/feishu/doc-reader.ts`** — Reads Feishu documents (docx/wiki) and converts Feishu blocks back to Markdown. Reverse of `markdown-to-blocks.ts`. Used by the `/api/feishu/document` endpoint and the `fd` CLI.
 - **`src/claude/session-manager.ts`** — In-memory sessions keyed by `chatId`. Each session has a fixed working directory (from bot config) and Claude session ID. Sessions expire after 24 hours.
 - **`src/feishu/card-builder.ts`** — Builds Feishu interactive card JSON. Cards have color-coded headers (blue=thinking/running, green=complete, red=error), tool call lists, markdown response content, and stats (cost/duration). Content truncated at 28KB.
 - **`src/feishu/message-sender.ts`** — Feishu API wrapper for sending/updating cards, uploading/downloading images, sending text.
@@ -62,20 +63,41 @@ Key module: **`src/bridge/outputs-manager.ts`** — Encapsulates the outputs dir
 One-way sync from MetaMemory documents to a Feishu Wiki space. The folder tree in MetaMemory maps to wiki nodes; each document becomes a Feishu docx page. Content change detection uses hash comparison for incremental sync.
 
 **Key modules:**
-- **`src/sync/doc-sync.ts`** — Core sync service. `DocSync` class with `syncAll()` (full sync) and `syncDocument(docId)` (incremental). Manages wiki space creation, folder node hierarchy, document content writing via docx block API.
+- **`src/sync/doc-sync.ts`** — Core sync service. `DocSync` class with `syncAll()` (full sync), `syncDocument(docId)` (incremental), and `startAutoSync()` (event-driven). Manages wiki space creation, folder node hierarchy, document content writing via docx block API.
 - **`src/sync/sync-store.ts`** — SQLite persistence for sync mappings (MetaMemory path ↔ Feishu node token). Tables: `sync_config`, `document_mappings`, `folder_mappings`.
 - **`src/sync/markdown-to-blocks.ts`** — Converts Markdown to Feishu document block structures. Handles headings, code blocks, lists, tables, quotes, todos, inline formatting.
+- **`src/memory/memory-events.ts`** — EventEmitter singleton (`memoryEvents`) that emits change events when MetaMemory documents/folders are created, updated, or deleted. Used by `DocSync.startAutoSync()` to trigger automatic wiki sync.
+
+**Auto-sync:** When MetaMemory content changes, wiki sync triggers automatically (5-second debounce). Multiple rapid changes are coalesced. Incremental sync for 1-10 docs, full sync fallback for bulk changes or folder structure changes. Manual `/sync` still available.
 
 **Feishu commands:** `/sync` (trigger full sync), `/sync status` (show stats).
 
-**API endpoints:** `POST /api/sync` (trigger), `GET /api/sync` (status), `POST /api/sync/document` (single doc sync).
+**API endpoints:** `POST /api/sync` (trigger), `GET /api/sync` (status), `POST /api/sync/document` (single doc sync), `GET /api/feishu/document` (read Feishu doc).
 
 **Environment variables:**
 - `WIKI_SYNC_ENABLED` — Set to `false` to disable (default: enabled when Feishu bots exist)
 - `WIKI_SPACE_NAME` — Wiki space name (default: `MetaMemory`)
 - `WIKI_SYNC_THROTTLE_MS` — Delay between API calls (default: 300ms)
+- `WIKI_AUTO_SYNC` — Set to `false` to disable auto-sync (default: enabled when wiki sync is configured)
+- `WIKI_AUTO_SYNC_DEBOUNCE_MS` — Debounce delay for auto-sync (default: 5000ms)
 
-**Required Feishu permissions:** `wiki:wiki`, `docx:document`, `drive:drive` — must be added in the Feishu Developer Console.
+**Required Feishu permissions:** `wiki:wiki`, `docx:document`, `docx:document:readonly`, `drive:drive` — must be added in the Feishu Developer Console.
+
+### Feishu Document Reading
+
+Read Feishu documents (standalone docx and wiki pages) and convert them to Markdown. Available via API and CLI.
+
+**API endpoint:** `GET /api/feishu/document?url=<feishu-url>&botName=<name>` or `?docId=<id>&botName=<name>`
+
+**CLI:** `fd read <url>`, `fd read-id <docId>`, `fd info <url>` (installed at `bin/fd`)
+
+**Skill:** `feishu-doc` — teaches Claude to use the `fd` CLI when users share Feishu document URLs.
+
+**Key module:** `src/feishu/doc-reader.ts` — `FeishuDocReader` class that fetches blocks via `docx.v1.documentBlock.list` and converts them to Markdown (reverse of `markdown-to-blocks.ts`).
+
+### Plan Mode Display
+
+When Claude enters plan mode and writes a plan to `.claude/plans/*.md`, the plan content is automatically sent to the Feishu user as a separate card message when `ExitPlanMode` is triggered. This is handled by `StreamProcessor` tracking plan file paths and `MessageBridge.sendPlanContent()` reading and sending the file.
 
 ### Session Isolation
 

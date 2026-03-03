@@ -539,6 +539,23 @@ mkdir -p "$SKILLS_DIR/metabot"
 cp "$METABOT_HOME/src/skills/metabot/SKILL.md" "$SKILLS_DIR/metabot/SKILL.md"
 success "metabot skill installed → $SKILLS_DIR/metabot"
 
+# Install feishu-doc skill (bundled in src/skills/feishu-doc/) — only when Feishu is configured
+HAS_FEISHU=false
+if [[ "$SKIP_CONFIG" == "false" && "$SETUP_FEISHU" == "true" ]]; then
+  HAS_FEISHU=true
+elif [[ "$SKIP_CONFIG" == "true" && -f "$METABOT_HOME/bots.json" ]]; then
+  # Detect from existing config
+  if node -e "const c=JSON.parse(require('fs').readFileSync('$METABOT_HOME/bots.json','utf-8')); process.exit((c.feishuBots||[]).length>0?0:1)" 2>/dev/null; then
+    HAS_FEISHU=true
+  fi
+fi
+if [[ "$HAS_FEISHU" == "true" && -f "$METABOT_HOME/src/skills/feishu-doc/SKILL.md" ]]; then
+  info "Installing feishu-doc skill..."
+  mkdir -p "$SKILLS_DIR/feishu-doc"
+  cp "$METABOT_HOME/src/skills/feishu-doc/SKILL.md" "$SKILLS_DIR/feishu-doc/SKILL.md"
+  success "feishu-doc skill installed → $SKILLS_DIR/feishu-doc"
+fi
+
 # Determine working directory
 if [[ "$SKIP_CONFIG" == "false" ]]; then
   DEPLOY_WORK_DIR="$WORK_DIR"
@@ -559,8 +576,10 @@ fi
 if [[ -n "${DEPLOY_WORK_DIR:-}" ]]; then
   SKILLS_DEST="$DEPLOY_WORK_DIR/.claude/skills"
 
-  # Copy skills
-  for SKILL in metaskill metamemory metabot; do
+  # Copy skills (common + feishu-doc if available)
+  DEPLOY_SKILLS="metaskill metamemory metabot"
+  [[ "$HAS_FEISHU" == "true" ]] && DEPLOY_SKILLS="$DEPLOY_SKILLS feishu-doc"
+  for SKILL in $DEPLOY_SKILLS; do
     if [[ -d "$SKILLS_DIR/$SKILL" ]]; then
       mkdir -p "$SKILLS_DEST/$SKILL"
       cp -r "$SKILLS_DIR/$SKILL/." "$SKILLS_DEST/$SKILL/"
@@ -781,7 +800,9 @@ source "$BASH_ALIASES" 2>/dev/null || true
 # Install mm/mb/metabot as standalone executables in ~/.local/bin (no source needed)
 LOCAL_BIN="$HOME/.local/bin"
 mkdir -p "$LOCAL_BIN"
-for cli in mm mb metabot; do
+CLI_TOOLS="mm mb metabot"
+[[ "$HAS_FEISHU" == "true" ]] && CLI_TOOLS="$CLI_TOOLS fd"
+for cli in $CLI_TOOLS; do
   if [[ -f "$METABOT_HOME/bin/$cli" ]]; then
     cp "$METABOT_HOME/bin/$cli" "$LOCAL_BIN/$cli"
     chmod +x "$LOCAL_BIN/$cli"
@@ -799,7 +820,11 @@ if ! echo "$PATH" | grep -q "$LOCAL_BIN"; then
   echo "export PATH=\"$LOCAL_BIN:\$PATH\"" >> "$HOME/.bashrc"
   info "Added ~/.local/bin to PATH in ~/.bashrc"
 fi
-success "mm/mb/metabot CLI tools installed to $LOCAL_BIN"
+if [[ "$HAS_FEISHU" == "true" ]]; then
+  success "mm/mb/metabot/fd CLI tools installed to $LOCAL_BIN"
+else
+  success "mm/mb/metabot CLI tools installed to $LOCAL_BIN"
+fi
 
 # ============================================================================
 # Phase 8: Build + Start MetaBot with PM2

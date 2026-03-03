@@ -22,6 +22,7 @@ interface FeishuBotHandle {
   wsClient: lark.WSClient;
   config: BotConfigBase;
   sender: IMessageSender;
+  feishuClient: lark.Client;
 }
 
 async function startFeishuBot(botConfig: BotConfig, logger: Logger, memoryServerUrl: string, memorySecret?: string): Promise<FeishuBotHandle> {
@@ -80,7 +81,7 @@ async function startFeishuBot(botConfig: BotConfig, logger: Logger, memoryServer
     maxBudgetUsd: botConfig.claude.maxBudgetUsd ?? 'unlimited',
   }, 'Configuration');
 
-  return { name: botConfig.name, bridge, wsClient, config: botConfig, sender };
+  return { name: botConfig.name, bridge, wsClient, config: botConfig, sender, feishuClient: client };
 }
 
 async function main() {
@@ -116,6 +117,7 @@ async function main() {
       config: handle.config,
       bridge: handle.bridge,
       sender: handle.sender,
+      feishuClient: handle.feishuClient,
     });
   }
 
@@ -169,7 +171,14 @@ async function main() {
     for (const handle of feishuHandles) {
       handle.bridge.setDocSync(docSync);
     }
-    logger.info('Wiki sync service initialized (use /sync to trigger)');
+    // Enable auto wiki sync on MetaMemory changes (debounced)
+    if (process.env.WIKI_AUTO_SYNC !== 'false') {
+      const debounceMs = process.env.WIKI_AUTO_SYNC_DEBOUNCE_MS
+        ? parseInt(process.env.WIKI_AUTO_SYNC_DEBOUNCE_MS, 10)
+        : 5000;
+      docSync.startAutoSync(debounceMs);
+    }
+    logger.info('Wiki sync service initialized (auto-sync enabled, /sync for manual trigger)');
   }
 
   // Resolve bots config path for API-driven bot CRUD

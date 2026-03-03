@@ -27,7 +27,7 @@ export class OutputHandler {
         if (file.isImage && file.sizeBytes < 10 * 1024 * 1024) {
           this.logger.info({ filePath: file.filePath }, 'Sending output image from outputs dir');
           await this.sender.sendImageFile(chatId, file.filePath);
-        } else if (!file.isImage && file.sizeBytes < 30 * 1024 * 1024) {
+        } else if (!file.isImage && file.sizeBytes < 50 * 1024 * 1024) {
           this.logger.info({ filePath: file.filePath }, 'Sending output file from outputs dir');
           const sent = await this.sender.sendLocalFile(chatId, file.filePath, file.fileName);
           if (!sent && OutputsManager.isTextFile(file.extension) && file.sizeBytes < 30 * 1024) {

@@ -17,12 +17,11 @@ If the user's request is empty or unclear, use `AskUserQuestion` to ask the user
 **All files are created inside this project folder:**
 ```
 <project-folder>/
-├── CLAUDE.md                          # Orchestration hub
+├── CLAUDE.md                          # Orchestration hub (YOU are the tech lead)
 ├── .mcp.json                          # MCP server config
 └── .claude/
     ├── agents/
-    │   ├── tech-lead.md
-    │   ├── code-reviewer.md
+    │   ├── code-reviewer.md           # Required: quality gate
     │   ├── <specialist-1>.md
     │   └── <specialist-2>.md
     ├── skills/
@@ -121,11 +120,12 @@ Write a comprehensive `CLAUDE.md` that serves as the orchestration hub. Structur
 
 ## Agent Team
 
+**You (the main Claude session reading this CLAUDE.md) are the orchestrator / tech lead.** You analyze tasks, break them down, delegate to specialist agents, and ensure quality. You never need a separate tech-lead agent — this file IS your orchestration guide.
+
 ### Routing Table
 
 | Task Type | Agent | When to Use |
 |-----------|-------|-------------|
-| Feature planning, task breakdown, delegation | tech-lead | Any new feature or complex task |
 | [domain-specific task 1] | [specialist-1] | [specific triggers] |
 | [domain-specific task 2] | [specialist-2] | [specific triggers] |
 | Code review, PR review | code-reviewer | All code changes before merge |
@@ -133,20 +133,39 @@ Write a comprehensive `CLAUDE.md` that serves as the orchestration hub. Structur
 
 ### Orchestration Protocol
 
-1. **Tech-lead is the routing authority.** When a complex task arrives, the tech-lead agent analyzes it and delegates to the appropriate specialist(s).
-2. **Main agent never implements directly** for multi-step tasks — it delegates to specialists via Task tool.
+1. **You are the routing authority.** When a complex task arrives, analyze it and delegate to the appropriate specialist(s) via Task tool.
+2. **For multi-step tasks, delegate to specialists** — break down the work and assign each piece to the right agent.
 3. **Handoff format:** When delegating, provide: (a) clear objective, (b) relevant file paths, (c) acceptance criteria, (d) which agent to hand off to next.
 4. **Max 2 agents in parallel** for complex tasks to avoid conflicts.
 5. **Code reviewer is the quality gate** — all code changes pass through code-reviewer before completion.
 
 ### Workflow Chains
 
-- **New Feature**: tech-lead → [specialist] → code-reviewer
-- **Bug Fix**: tech-lead → [specialist] → code-reviewer
-- **Refactor**: tech-lead → code-reviewer (review plan) → [specialist] → code-reviewer
+- **New Feature**: you (plan & delegate) → [specialist] → code-reviewer
+- **Bug Fix**: you (triage) → [specialist] → code-reviewer
+- **Refactor**: you (plan) → code-reviewer (review plan) → [specialist] → code-reviewer
 
 ## Coding Standards
 [Based on research findings — language conventions, naming, patterns]
+
+## Shared Knowledge (MetaMemory)
+
+All agents share context through MetaMemory. Use the `mm` CLI to read and write shared documents.
+
+### Quick Reference
+```bash
+mm search <query>                    # Find existing knowledge
+mm get <doc-id>                      # Read a document
+mm list [--folder <id>]              # Browse documents
+mm create -t "Title" -c "Content"    # Save new knowledge
+mm update <doc-id> -c "New content"  # Update existing doc
+```
+
+### When to Use
+- **Before starting work**: Search MetaMemory for existing context, decisions, and lessons
+- **After completing work**: Save important decisions, architecture notes, and findings
+- **When discovering patterns**: Document reusable patterns for other agents to reference
+- Use `--by "agent-name"` when creating/updating to track which agent contributed
 
 ## Workflow Discipline (All Agents)
 
@@ -169,6 +188,7 @@ Write a comprehensive `CLAUDE.md` that serves as the orchestration hub. Structur
 - After ANY correction from the user: record the pattern as a lesson
 - Write rules for yourself that prevent the same mistake
 - Review lessons at session start for relevant context
+- Save important lessons and discoveries to MetaMemory (`mm create`) so all agents benefit
 
 ### Core Principles
 - **Simplicity First**: Make every change as simple as possible. Minimal code impact.
@@ -181,25 +201,15 @@ Write a comprehensive `CLAUDE.md` that serves as the orchestration hub. Structur
 [List the skills created below with brief descriptions]
 ```
 
-### File 2: .claude/agents/ (4-6 agent files)
+### File 2: .claude/agents/ (3-5 agent files)
 
-Create each agent as `.claude/agents/<name>.md`. Every team MUST include:
+Create each agent as `.claude/agents/<name>.md`. Note: there is NO tech-lead agent — CLAUDE.md itself serves as the orchestrator.
 
 **IMPORTANT: Every agent's system prompt MUST end with the Workflow Discipline section** (the same block from the CLAUDE.md template above). Copy it verbatim into each agent's system prompt after their domain-specific instructions.
 
-#### Required Agents:
+#### Required Agent:
 
-**a) tech-lead.md** (Orchestrator)
-```yaml
----
-name: tech-lead
-description: "Use this agent when a complex task needs to be broken down, when multiple agents need coordination, or when the best approach is unclear. For example: implementing a new feature, planning a refactor, triaging a bug report."
-model: opus
----
-```
-System prompt: Expert tech lead who analyzes tasks, breaks them into subtasks, delegates to specialists, and ensures quality. Knows the team's capabilities. Never implements directly — always delegates. Uses structured handoff documents.
-
-**b) code-reviewer.md** (Quality Gate)
+**code-reviewer.md** (Quality Gate)
 ```yaml
 ---
 name: code-reviewer
@@ -318,8 +328,9 @@ Select servers based on your research findings. Here is the **verified catalog**
 | playwright | `@playwright/mcp@latest` | `["-y", "@playwright/mcp@latest"]` | Browser automation & testing | Web projects (by Microsoft) |
 | postgres | `@modelcontextprotocol/server-postgres` | `["-y", "@modelcontextprotocol/server-postgres", "postgresql://user:pass@host:5432/db"]` | Database operations | Projects with PostgreSQL |
 | sequential-thinking | `@modelcontextprotocol/server-sequential-thinking` | `["-y", "@modelcontextprotocol/server-sequential-thinking"]` | Structured reasoning | Complex problem-solving |
-| memory | `@modelcontextprotocol/server-memory` | `["-y", "@modelcontextprotocol/server-memory"]` | Persistent knowledge graph | Projects needing cross-session memory |
 | github | HTTP transport | N/A (see below) | GitHub API access | Any project on GitHub |
+
+> **Note:** Cross-session memory is handled by MetaMemory (integrated in CLAUDE.md via `mm` CLI). No need for the `@modelcontextprotocol/server-memory` MCP package.
 
 **GitHub MCP server** uses HTTP transport, not stdio. Configure it as:
 ```json
@@ -432,9 +443,8 @@ cat .mcp.json | python3 -m json.tool > /dev/null && echo "Valid JSON" || echo "I
 <absolute-path-to-project-folder>/
 
 ### Files Created
-- CLAUDE.md (orchestration hub)
+- CLAUDE.md (orchestration hub — you are the tech lead)
 - .mcp.json (MCP server config — auto-discovered by Claude Code)
-- .claude/agents/tech-lead.md
 - .claude/agents/[specialist-1].md
 - .claude/agents/[specialist-2].md
 - .claude/agents/code-reviewer.md
@@ -445,7 +455,7 @@ cat .mcp.json | python3 -m json.tool > /dev/null && echo "Valid JSON" || echo "I
 ### Agent Team
 | Agent | Role | Model |
 |-------|------|-------|
-| tech-lead | Orchestrator & task delegation | opus |
+| (CLAUDE.md) | Orchestrator (main session) | — |
 | [name] | [role] | sonnet |
 | ... | ... | ... |
 
@@ -462,7 +472,7 @@ cat .mcp.json | python3 -m json.tool > /dev/null && echo "Valid JSON" || echo "I
 3. Run `claude` inside the folder — agents, skills, rules, and MCP servers are all auto-discovered
 4. If any credentials were skipped, edit `.mcp.json` to add them before using those MCP servers
 5. Try: "Plan and implement [a feature relevant to this project type]"
-6. The tech-lead agent will automatically break it down and delegate to specialists
+6. Claude will automatically break it down and delegate to specialist agents
 ```
 
 ---
@@ -482,3 +492,4 @@ cat .mcp.json | python3 -m json.tool > /dev/null && echo "Valid JSON" || echo "I
 11. **Respect existing folders.** If a folder with the same name already exists, ask the user before overwriting. Suggest a different name or offer to merge.
 12. **Validate frontmatter.** Every agent and skill must have valid YAML frontmatter with at minimum `name` and `description`.
 13. **Init git.** Run `git init` inside the project folder so it's a proper repo from the start.
+14. **Include MetaMemory integration.** Always add the "Shared Knowledge (MetaMemory)" section to CLAUDE.md. The `mm` CLI enables cross-agent knowledge sharing without needing the MCP memory server.
