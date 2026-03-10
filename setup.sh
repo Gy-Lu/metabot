@@ -39,15 +39,14 @@ if [ "$NODE_VER" -lt 18 ]; then
 fi
 ok "Node.js $(node -v)"
 
-# ---- 2. Check Claude CLI ----
-info "Checking Claude Code CLI..."
-if ! command -v claude &>/dev/null; then
-  warn "Claude Code CLI not found. Installing..."
-  npm install -g @anthropic-ai/claude-code
+# ---- 2. Check Codex CLI ----
+info "Checking Codex CLI..."
+if ! command -v codex &>/dev/null; then
+  fail "Codex CLI not found. Please install Codex first, then re-run setup."
 fi
-ok "Claude CLI: $(which claude)"
+ok "Codex CLI: $(which codex)"
 echo ""
-warn "Make sure Claude is authenticated (run 'claude login' in a separate terminal)"
+warn "Make sure Codex is authenticated (run 'codex login' in a separate terminal)"
 echo ""
 
 # ---- 3. Install dependencies ----
@@ -140,6 +139,6 @@ echo "    pm2 startup"
 echo "    pm2 save"
 echo ""
 echo "  Next steps:"
-echo "    1. Make sure Claude CLI is authenticated (claude login)"
+echo "    1. Make sure Codex CLI is authenticated (codex login)"
 echo "    2. Open Feishu and send a message to your bot"
 echo ""

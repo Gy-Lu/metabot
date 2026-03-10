@@ -43,8 +43,8 @@ const messages = {
     zh: '任务已被用户终止',
   },
   unexpected_end: {
-    en: 'Claude session ended unexpectedly',
-    zh: 'Claude 会话意外结束',
+    en: 'Codex session ended unexpectedly',
+    zh: 'Codex 会话意外结束',
   },
   reply_text_only: {
     en: 'Please reply with text, or type a custom answer.',

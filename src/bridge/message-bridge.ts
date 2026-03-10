@@ -129,7 +129,7 @@ export class MessageBridge {
       const handled = await this.commandHandler.handle(msg);
       if (handled) return;
 
-      // Unrecognized /xxx command — pass through to Claude
+      // Unrecognized /xxx command — pass through to Codex
       if (this.runningTasks.has(chatId)) {
         await this.sender.sendTextNotice(
           chatId,
@@ -174,7 +174,7 @@ export class MessageBridge {
       return;
     }
 
-    // Execute Claude query
+    // Execute Codex query
     await this.executeQuery(msg);
   }
 
@@ -220,7 +220,7 @@ export class MessageBridge {
     const sessionId = task.processor.getSessionId() || '';
     task.executionHandle.sendAnswer(pending.toolUseId, sessionId, answerJson);
 
-    this.logger.info({ chatId, answer: answerText, toolUseId: pending.toolUseId }, 'Sent user answer to Claude');
+    this.logger.info({ chatId, answer: answerText, toolUseId: pending.toolUseId }, 'Sent user answer to Codex');
   }
 
   private async executeQuery(msg: IncomingMessage): Promise<void> {
@@ -417,15 +417,15 @@ export class MessageBridge {
           lastState = {
             ...lastState,
             status: lastState.responseText ? 'complete' : 'error',
-            errorMessage: lastState.responseText ? undefined : 'Claude session ended unexpectedly',
+            errorMessage: lastState.responseText ? undefined : 'Codex session ended unexpectedly',
           };
         }
       }
 
-      // Auto-clear stale session when Claude can't find the conversation
+      // Auto-clear stale session when Codex can't find the session
       if (lastState.status === 'error' && lastState.errorMessage &&
-          (lastState.errorMessage.includes('No conversation found') || lastState.errorMessage.includes('session'))) {
-        this.logger.info({ chatId }, 'Clearing stale session ID due to conversation not found');
+          (lastState.errorMessage.includes('No session found') || lastState.errorMessage.includes('session'))) {
+        this.logger.info({ chatId }, 'Clearing stale session ID due to missing session');
         this.sessionManager.resetSession(chatId);
       }
 
@@ -448,15 +448,15 @@ export class MessageBridge {
       metrics.observeHistogram('metabot_task_duration_seconds', durationMs / 1000);
       if (lastState.costUsd) metrics.observeHistogram('metabot_task_cost_usd', lastState.costUsd);
 
-      // Send any output files produced by Claude
+      // Send any output files produced by Codex
       await this.outputHandler.sendOutputFiles(chatId, outputsDir, processor, lastState);
     } catch (err: any) {
-      this.logger.error({ err, chatId, userId }, 'Claude execution error');
+      this.logger.error({ err, chatId, userId }, 'Codex execution error');
 
-      // Auto-clear stale session when Claude can't find the conversation
+      // Auto-clear stale session when Codex can't find the session
       const errMsg: string = err.message || '';
-      if (errMsg.includes('No conversation found') || errMsg.includes('session')) {
-        this.logger.info({ chatId }, 'Clearing stale session ID due to conversation not found');
+      if (errMsg.includes('No session found') || errMsg.includes('session')) {
+        this.logger.info({ chatId }, 'Clearing stale session ID due to missing session');
         this.sessionManager.resetSession(chatId);
       }
 
@@ -641,7 +641,7 @@ export class MessageBridge {
           lastState = {
             ...lastState,
             status: lastState.responseText ? 'complete' : 'error',
-            errorMessage: lastState.responseText ? undefined : 'Claude session ended unexpectedly',
+            errorMessage: lastState.responseText ? undefined : 'Codex session ended unexpectedly',
           };
         }
       }

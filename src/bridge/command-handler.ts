@@ -47,7 +47,7 @@ export class CommandHandler {
           '`/help` - Show this help message',
           '',
           '**Usage:**',
-          'Send any text message to start a conversation with Claude Code.',
+          'Send any text message to start a conversation with Codex.',
           'Each chat has an independent session with a fixed working directory.',
           '',
           '**Memory Commands:**',
@@ -103,7 +103,7 @@ export class CommandHandler {
       }
 
       default:
-        // Unrecognized /xxx commands — not handled here, pass through to Claude
+        // Unrecognized /xxx commands — not handled here, pass through to Codex
         return false;
     }
   }

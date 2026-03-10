@@ -48,7 +48,7 @@ export function buildCard(state: CardState): string {
   } else if (state.status === 'thinking') {
     elements.push({
       tag: 'markdown',
-      content: '_Claude is thinking..._',
+      content: '_Codex is thinking..._',
     });
   }
 
@@ -136,7 +136,7 @@ export function buildHelpCard(): string {
           '`/help` - Show this help message',
           '',
           '**Usage:**',
-          'Send any text message to start a conversation with Claude Code.',
+          'Send any text message to start a conversation with Codex.',
           'Each chat has an independent session with a fixed working directory.',
           '',
           '**Memory Commands:**',

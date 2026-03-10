@@ -1,57 +1,23 @@
 import { execSync, spawn } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
-import { query } from '@anthropic-ai/claude-agent-sdk';
-import type { SDKUserMessage, SpawnOptions, SpawnedProcess } from '@anthropic-ai/claude-agent-sdk';
 import type { BotConfigBase } from '../config.js';
 import type { Logger } from '../utils/logger.js';
 import { AsyncQueue } from '../utils/async-queue.js';
 
 const isWindows = process.platform === 'win32';
 
-/** Resolve the Claude Code binary path at module load time. */
-function resolveClaudePath(): string {
-  if (process.env.CLAUDE_EXECUTABLE_PATH) return process.env.CLAUDE_EXECUTABLE_PATH;
+/** Resolve the Codex CLI binary path at module load time. */
+function resolveCodexPath(): string {
+  if (process.env.CODEX_EXECUTABLE_PATH) return process.env.CODEX_EXECUTABLE_PATH;
+  if (process.env.CLAUDE_EXECUTABLE_PATH) return process.env.CLAUDE_EXECUTABLE_PATH; // backward compat
   try {
-    const cmd = isWindows ? 'where claude' : 'which claude';
+    const cmd = isWindows ? 'where codex' : 'which codex';
     return execSync(cmd, { encoding: 'utf-8' }).trim().split(/\r?\n/)[0];
   } catch {
-    return isWindows ? 'claude' : '/usr/local/bin/claude';
+    return 'codex';
   }
 }
 
-const CLAUDE_EXECUTABLE = resolveClaudePath();
-
-/**
- * Custom spawn function for cross-platform compatibility.
- * - Uses process.execPath (current Node binary) to avoid PATH issues on Windows.
- * - Filters CLAUDE* env vars to prevent "nested session" errors.
- * - Merges process.env so child inherits system PATH, TEMP, etc.
- */
-function customSpawn(options: SpawnOptions): SpawnedProcess {
-  const nodePath = process.execPath;
-
-  // Merge provided env with process.env for a complete environment
-  const baseEnv = options.env && Object.keys(options.env).length > 0
-    ? { ...process.env, ...options.env }
-    : { ...process.env };
-
-  // Filter out CLAUDE* vars to avoid nested session detection
-  const env: Record<string, string> = {};
-  for (const [key, value] of Object.entries(baseEnv)) {
-    if (!key.startsWith('CLAUDE') && value !== undefined) {
-      env[key] = value;
-    }
-  }
-
-  const child = spawn(nodePath, options.args, {
-    cwd: options.cwd,
-    env,
-    signal: options.signal,
-    stdio: ['pipe', 'pipe', 'pipe'],
-  });
-
-  return child as unknown as SpawnedProcess;
-}
+const CODEX_EXECUTABLE = resolveCodexPath();
 
 export interface ApiContext {
   botName: string;
@@ -113,31 +79,26 @@ export interface ExecutionHandle {
   finish(): void;
 }
 
+type CodexEvent = {
+  type: string;
+  thread_id?: string;
+  item?: {
+    type?: string;
+    text?: string;
+    command?: string;
+    status?: string;
+    aggregated_output?: string;
+    exit_code?: number | null;
+  };
+};
+
 export class ClaudeExecutor {
   constructor(
     private config: BotConfigBase,
     private logger: Logger,
   ) {}
 
-  private buildQueryOptions(cwd: string, sessionId: string | undefined, abortController: AbortController, outputsDir?: string, apiContext?: ApiContext): Record<string, unknown> {
-    const queryOptions: Record<string, unknown> = {
-      allowedTools: this.config.claude.allowedTools,
-      permissionMode: 'bypassPermissions' as const,
-      allowDangerouslySkipPermissions: true,
-      cwd,
-      abortController,
-      includePartialMessages: true,
-      // Load MCP servers and settings from user/project config files
-      settingSources: ['user', 'project'],
-      // Cross-platform spawn: custom spawn filters CLAUDE* env vars and uses
-      // process.execPath to avoid PATH issues on Windows; fileURLToPath converts
-      // file:// URLs to native paths for the SDK CLI entrypoint.
-      spawnClaudeCodeProcess: customSpawn,
-      executableArgs: [fileURLToPath(import.meta.resolve('@anthropic-ai/claude-agent-sdk/cli.js'))],
-      pathToClaudeCodeExecutable: CLAUDE_EXECUTABLE,
-    };
-
-    // Build system prompt appendix from sections
+  private buildPrompt(prompt: string, outputsDir?: string, apiContext?: ApiContext): string {
     const appendSections: string[] = [];
 
     if (outputsDir) {
@@ -153,69 +114,182 @@ export class ClaudeExecutor {
       );
     }
 
-    if (appendSections.length > 0) {
-      queryOptions.systemPrompt = {
-        type: 'preset',
-        preset: 'claude_code',
-        append: '\n\n' + appendSections.join('\n\n'),
-      };
+    if (appendSections.length === 0) {
+      return prompt;
     }
 
-    if (this.config.claude.maxTurns !== undefined) {
-      queryOptions.maxTurns = this.config.claude.maxTurns;
-    }
+    return `${prompt}\n\n---\n\n${appendSections.join('\n\n')}`;
+  }
 
-    if (this.config.claude.maxBudgetUsd !== undefined) {
-      queryOptions.maxBudgetUsd = this.config.claude.maxBudgetUsd;
-    }
-
-    if (this.config.claude.model) {
-      queryOptions.model = this.config.claude.model;
-    }
+  private buildCodexArgs(prompt: string, sessionId?: string): string[] {
+    const args: string[] = ['exec'];
 
     if (sessionId) {
-      queryOptions.resume = sessionId;
+      args.push('resume', sessionId);
     }
 
-    return queryOptions;
+    args.push('--json');
+    args.push('--skip-git-repo-check');
+    args.push('--sandbox', 'danger-full-access');
+
+    if (this.config.claude.model) {
+      args.push('--model', this.config.claude.model);
+    }
+
+    args.push(prompt);
+    return args;
   }
 
   startExecution(options: ExecutorOptions): ExecutionHandle {
     const { prompt, cwd, sessionId, abortController, outputsDir, apiContext } = options;
+    const startTime = Date.now();
+    const queue = new AsyncQueue<SDKMessage>();
+    let finalSent = false;
+    let responseText = '';
+    let currentSessionId = sessionId;
+    let stdoutBuffer = '';
+    let stderrBuffer = '';
 
-    this.logger.info({ cwd, hasSession: !!sessionId, outputsDir }, 'Starting Claude execution (multi-turn)');
+    const composedPrompt = this.buildPrompt(prompt, outputsDir, apiContext);
+    const args = this.buildCodexArgs(composedPrompt, sessionId);
 
-    const inputQueue = new AsyncQueue<SDKUserMessage>();
+    this.logger.info({ cwd, hasSession: !!sessionId, outputsDir, args }, 'Starting Codex execution');
 
-    // Push the initial user message
-    const initialMessage: SDKUserMessage = {
-      type: 'user',
-      message: {
-        role: 'user' as const,
-        content: prompt,
-      },
-      parent_tool_use_id: null,
-      session_id: sessionId || '',
-    };
-    inputQueue.enqueue(initialMessage);
-
-    const queryOptions = this.buildQueryOptions(cwd, sessionId, abortController, outputsDir, apiContext);
-
-    const stream = query({
-      prompt: inputQueue,
-      options: queryOptions as any,
+    const child = spawn(CODEX_EXECUTABLE, args, {
+      cwd,
+      env: { ...process.env },
+      stdio: ['ignore', 'pipe', 'pipe'],
     });
 
-    const logger = this.logger;
+    const pushResult = (subtype: 'success' | 'error', errors?: string[]) => {
+      if (finalSent) return;
+      finalSent = true;
+      queue.enqueue({
+        type: 'result',
+        subtype,
+        session_id: currentSessionId,
+        result: responseText,
+        is_error: subtype !== 'success',
+        duration_ms: Date.now() - startTime,
+        errors,
+      });
+      queue.finish();
+    };
 
-    async function* wrapStream(): AsyncGenerator<SDKMessage> {
+    const onCodexEvent = (event: CodexEvent) => {
+      if (event.type === 'thread.started' && event.thread_id) {
+        currentSessionId = event.thread_id;
+        queue.enqueue({
+          type: 'system',
+          session_id: event.thread_id,
+        });
+        return;
+      }
+
+      if (event.type === 'item.started' && event.item?.type === 'command_execution') {
+        queue.enqueue({
+          type: 'assistant',
+          session_id: currentSessionId,
+          parent_tool_use_id: null,
+          message: {
+            content: [{
+              type: 'tool_use',
+              name: 'Bash',
+              input: { command: event.item.command || '' },
+            }],
+          },
+        });
+        return;
+      }
+
+      if (event.type === 'item.completed' && event.item?.type === 'agent_message') {
+        if (event.item.text) {
+          responseText = responseText ? `${responseText}\n\n${event.item.text}` : event.item.text;
+          queue.enqueue({
+            type: 'assistant',
+            session_id: currentSessionId,
+            parent_tool_use_id: null,
+            message: {
+              content: [{ type: 'text', text: responseText }],
+            },
+          });
+        }
+        return;
+      }
+
+      if (event.type === 'item.completed' && event.item?.type === 'command_execution') {
+        queue.enqueue({
+          type: 'assistant',
+          session_id: currentSessionId,
+          parent_tool_use_id: null,
+          message: {
+            content: [{ type: 'tool_result' }],
+          },
+        });
+      }
+    };
+
+    const consumeStdoutLines = (chunk: string) => {
+      stdoutBuffer += chunk;
+      const lines = stdoutBuffer.split(/\r?\n/);
+      stdoutBuffer = lines.pop() || '';
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        try {
+          const event = JSON.parse(trimmed) as CodexEvent;
+          onCodexEvent(event);
+        } catch {
+          this.logger.warn({ line: trimmed }, 'Failed to parse Codex JSONL line');
+        }
+      }
+    };
+
+    child.stdout.on('data', (buf: Buffer) => {
+      consumeStdoutLines(buf.toString('utf-8'));
+    });
+
+    child.stderr.on('data', (buf: Buffer) => {
+      stderrBuffer += buf.toString('utf-8');
+      if (stderrBuffer.length > 8000) {
+        stderrBuffer = stderrBuffer.slice(-8000);
+      }
+    });
+
+    child.on('error', (err) => {
+      this.logger.error({ err }, 'Codex process error');
+      pushResult('error', [err.message || 'Codex process failed']);
+    });
+
+    child.on('close', (code) => {
+      if (stdoutBuffer.trim()) {
+        consumeStdoutLines('\n');
+      }
+      if (code === 0) {
+        pushResult('success');
+        return;
+      }
+      const errMsg = stderrBuffer.trim() || `Codex process exited with code ${code ?? 'unknown'}`;
+      pushResult('error', [errMsg]);
+    });
+
+    const abortChild = () => {
+      if (child.killed) return;
+      child.kill('SIGTERM');
+      setTimeout(() => {
+        if (!child.killed) child.kill('SIGKILL');
+      }, 1500).unref();
+    };
+    abortController.signal.addEventListener('abort', abortChild, { once: true });
+
+    async function* wrapStream(streamQueue: AsyncQueue<SDKMessage>, logger: Logger): AsyncGenerator<SDKMessage> {
       try {
-        for await (const message of stream) {
-          yield message as SDKMessage;
+        for await (const message of streamQueue) {
+          yield message;
         }
       } catch (err: any) {
         if (err.name === 'AbortError' || abortController.signal.aborted) {
-          logger.info('Claude execution aborted');
+          logger.info('Codex execution aborted');
           return;
         }
         throw err;
@@ -223,54 +297,20 @@ export class ClaudeExecutor {
     }
 
     return {
-      stream: wrapStream(),
-      sendAnswer: (toolUseId: string, sid: string, answerText: string) => {
-        logger.info({ toolUseId }, 'Sending answer to Claude');
-        const answerMessage: SDKUserMessage = {
-          type: 'user',
-          message: {
-            role: 'user' as const,
-            content: [
-              {
-                type: 'tool_result',
-                tool_use_id: toolUseId,
-                content: answerText,
-              },
-            ],
-          },
-          parent_tool_use_id: null,
-          session_id: sid,
-        };
-        inputQueue.enqueue(answerMessage);
+      stream: wrapStream(queue, this.logger),
+      sendAnswer: (_toolUseId: string, _sid: string, _answerText: string) => {
+        this.logger.warn('Codex executor does not support tool_result answers; ignoring sendAnswer');
       },
       finish: () => {
-        inputQueue.finish();
+        abortChild();
       },
     };
   }
 
   async *execute(options: ExecutorOptions): AsyncGenerator<SDKMessage> {
-    const { prompt, cwd, sessionId, abortController, outputsDir } = options;
-
-    this.logger.info({ cwd, hasSession: !!sessionId }, 'Starting Claude execution');
-
-    const queryOptions = this.buildQueryOptions(cwd, sessionId, abortController, outputsDir);
-
-    const stream = query({
-      prompt,
-      options: queryOptions as any,
-    });
-
-    try {
-      for await (const message of stream) {
-        yield message as SDKMessage;
-      }
-    } catch (err: any) {
-      if (err.name === 'AbortError' || abortController.signal.aborted) {
-        this.logger.info('Claude execution aborted');
-        return;
-      }
-      throw err;
+    const handle = this.startExecution(options);
+    for await (const message of handle.stream) {
+      yield message;
     }
   }
 }

@@ -88,7 +88,7 @@ async function main() {
   const appConfig = loadAppConfig();
   const logger = createLogger(appConfig.log.level);
 
-  // Ensure MEMORY_SECRET env var is available for Claude subprocesses (used by metamemory skill)
+  // Ensure MEMORY_SECRET env var is available for Codex subprocesses (used by metamemory skill)
   if (appConfig.memory.secret && !process.env.MEMORY_SECRET) {
     process.env.MEMORY_SECRET = appConfig.memory.secret;
   }
